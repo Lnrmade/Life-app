@@ -1,0 +1,124 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #0c0c0e;
+  --color-coal: #161618;
+  --color-pit: #1f1f23;
+  --color-line: #2d2d33;
+  --color-bone: #f3efe4;
+  --color-ash: #9a978f;
+  --color-dim: #5f5d58;
+  --color-cash: #ffd23f;
+  --color-gym: #ff7a59;
+  --color-sport: #b6f36a;
+  --color-sleep: #a78bfa;
+  --color-work: #5cc8ff;
+  --color-finance: #ffd23f;
+  --color-savings: #5eead4;
+  --color-trip: #ff6a2b;
+  --color-bad: #ff5d5d;
+
+  --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-pixel: "Jersey 25", ui-monospace, monospace;
+}
+
+:root {
+  color-scheme: dark;
+  --tc: var(--color-cash);
+}
+
+html,
+body {
+  background: var(--color-ink);
+  color: var(--color-bone);
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.45;
+}
+
+.font-pixel {
+  font-family: var(--font-pixel);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
+.pixelated {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* Hard pixel corners: a 4px notch instead of a soft radius. */
+.px-corners {
+  clip-path: polygon(
+    0 4px, 4px 4px, 4px 0,
+    calc(100% - 4px) 0, calc(100% - 4px) 4px, 100% 4px,
+    100% calc(100% - 4px), calc(100% - 4px) calc(100% - 4px), calc(100% - 4px) 100%,
+    4px 100%, 4px calc(100% - 4px), 0 calc(100% - 4px)
+  );
+}
+
+.stage-dots {
+  background-image: radial-gradient(circle, rgb(255 255 255 / 0.07) 1.1px, transparent 1.4px);
+  background-size: 11px 11px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-cash);
+  outline-offset: 2px;
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  font-size: 16px; /* stops iOS zooming on focus */
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+input[type="range"] {
+  accent-color: var(--tc);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+@keyframes pop-in {
+  0% { transform: scale(0.6); opacity: 0; }
+  60% { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes arrive {
+  0% { background-color: color-mix(in srgb, var(--color-cash) 34%, var(--color-coal)); }
+  100% { background-color: var(--color-coal); }
+}
+.arrive {
+  animation: arrive 900ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

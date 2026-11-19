@@ -10,6 +10,25 @@ const MAX_HOPS = 4;
 
 const fail = (status: number, error: string) => Response.json({ error }, { status });
 
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+
+/** With accounts on, only signed-in people may use this route. The login is checked with Supabase itself. */
+async function isSignedIn(request: Request) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return true;
+  const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+  if (!token) return false;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: { apikey: SUPABASE_KEY, authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(4000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 /** Only public http(s) addresses. Stops the route being used to reach internal hosts. */
 async function assertPublic(url: URL) {
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Only http and https links work.");
@@ -21,6 +40,7 @@ async function assertPublic(url: URL) {
 }
 
 export async function GET(request: Request) {
+  if (!(await isSignedIn(request))) return fail(401, "Log in to look up links.");
   const raw = new URL(request.url).searchParams.get("url")?.trim();
   if (!raw || raw.length > 2000) return fail(400, "Send a link in the url parameter.");
 

@@ -1,7 +1,8 @@
 "use client";
 
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { mergeData } from "./sync";
 import { DEFAULT_SETTINGS, EMPTY_DATA } from "./types";
 import type { GroceryItem, LifeData, Logs, Settings, TrackerId, Trip, WishItem } from "./types";
 
@@ -38,6 +39,8 @@ interface Actions {
   removeTrip: (id: string) => void;
 
   replaceAll: (data: LifeData) => void;
+  /** Adds what is missing from `data` without touching what is already here. */
+  adoptData: (data: LifeData) => void;
 
   /** Not persisted: the last thing logged, so the character can react. */
   event: GameEvent | null;
@@ -45,6 +48,31 @@ interface Actions {
 }
 
 export type LifeStore = LifeData & Actions;
+
+/**
+ * Where the data is kept on this device. Without accounts there is one shared slot ("local").
+ * With accounts each person gets their own, and nothing is read or written while nobody is signed in.
+ */
+export const STORE_NAME = "life-app-v1";
+let scope: string | null = "local";
+const keyFor = (name: string) => (scope === "local" ? name : `${name}:u:${scope}`);
+
+export const scopedKey = (userId: string) => `${STORE_NAME}:u:${userId}`;
+
+const storage = createJSONStorage<unknown>(() => ({
+  getItem: (name: string) => {
+    if (scope === null) return null;
+    try { return localStorage.getItem(keyFor(name)); } catch { return null; }
+  },
+  setItem: (name: string, value: string) => {
+    if (scope === null) return;
+    try { localStorage.setItem(keyFor(name), value); } catch { /* storage full or blocked */ }
+  },
+  removeItem: (name: string) => {
+    if (scope === null) return;
+    try { localStorage.removeItem(keyFor(name)); } catch { /* ignore */ }
+  },
+}));
 
 const norm = (s: string) => s.trim().toLowerCase();
 
@@ -119,12 +147,16 @@ export const useLife = create<LifeStore>()(
           settings: { ...DEFAULT_SETTINGS, ...data.settings },
         }),
 
+      adoptData: (data) =>
+        set((s) => mergeData({ logs: s.logs, groceries: s.groceries, wishlist: s.wishlist, trips: s.trips, settings: s.settings }, data)),
+
       fire: (event) => set({ event: { ...event, at: Date.now() } }),
     }),
     {
-      name: "life-app-v1",
+      name: STORE_NAME,
       version: 1,
       skipHydration: true,
+      storage,
       partialize: (s): LifeData => ({
         logs: s.logs,
         groceries: s.groceries,
@@ -144,6 +176,15 @@ export const useLife = create<LifeStore>()(
     },
   ),
 );
+
+/** Switches whose data is loaded. `null` empties the screen and stops saving. */
+export async function activateScope(next: string | null) {
+  scope = null;
+  useLife.setState({ ...EMPTY_DATA, event: null });
+  if (next === null) return;
+  scope = next;
+  await useLife.persist.rehydrate();
+}
 
 export const snapshot = (): LifeData => {
   const s = useLife.getState();

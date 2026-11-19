@@ -141,3 +141,122 @@ describe("link previews", () => {
     for (const ip of ["8.8.8.8", "151.101.1.69", "2a00:1450:400e:80c::200e"]) expect(isPrivateAddress(ip)).toBe(false);
   });
 });
+
+/* ---------- syncing ---------- */
+import { applyRemote, canon, diff, flatten, hash, keyOf, mergeData } from "./sync";
+import type { Row, Shadow } from "./sync";
+import type { LifeData } from "./types";
+
+const data = (patch: Partial<LifeData> = {}): LifeData => ({ ...EMPTY_DATA, logs: { ...EMPTY_DATA.logs }, ...patch });
+const gym = (id: string, minutes = 60) => ({ id, date: "2026-11-16", kind: "Push", minutes });
+const shadowOf = (d: LifeData): Shadow => Object.fromEntries([...flatten(d)].map(([k, v]) => [k, v.hash]));
+
+describe("fingerprints", () => {
+  it("do not depend on key order or undefined fields", () => {
+    expect(canon({ b: 1, a: [1, { y: 2, x: undefined }] })).toBe(canon({ a: [1, { y: 2 }], b: 1 }));
+    expect(hash(canon({ a: 1, b: 2 }))).toBe(hash(canon({ b: 2, a: 1 })));
+    expect(hash(canon({ a: 1 }))).not.toBe(hash(canon({ a: 2 })));
+  });
+});
+
+describe("diff", () => {
+  it("uploads new and changed items and marks removed ones as deleted", () => {
+    const first = data({ logs: { ...EMPTY_DATA.logs, gym: [gym("a"), gym("b")] } });
+    const shadow = shadowOf(first);
+    expect(diff(flatten(first), shadow).rows).toEqual([]);
+
+    const next = data({ logs: { ...EMPTY_DATA.logs, gym: [gym("a", 90), gym("c")] } });
+    const { rows } = diff(flatten(next), shadow);
+    expect(rows.map((r) => `${r.id}:${r.deleted ? "del" : "up"}`).sort()).toEqual(["a:up", "b:del", "c:up"]);
+    expect(rows.find((r) => r.id === "b")?.data).toBeNull();
+  });
+
+  it("leaves default settings and half-loaded wishlist links out", () => {
+    const d = data({ wishlist: [{ id: "w", url: "https://x.nl", title: "x", site: "x.nl", currency: "EUR", addedAt: 1, status: "loading" }] });
+    expect(flatten(d).size).toBe(0);
+    const edited = data({ settings: { ...DEFAULT_SETTINGS, gymPerWeek: 5 } });
+    expect([...flatten(edited).keys()]).toEqual(["settings:main"]);
+  });
+
+  it("uploads everything on a first sync and deletions when data is erased", () => {
+    const d = data({ logs: { ...EMPTY_DATA.logs, gym: [gym("a")] }, groceries: [{ id: "g", name: "Melk", needed: true, movedAt: 1 }] });
+    expect(diff(flatten(d), {}).rows).toHaveLength(2);
+    expect(diff(flatten(EMPTY_DATA), shadowOf(d)).rows.every((r) => r.deleted)).toBe(true);
+  });
+});
+
+describe("applyRemote", () => {
+  const row = (kind: Row["kind"], id: string, value: unknown, deleted = false): Row => ({ kind, id, data: deleted ? null : value, deleted });
+
+  it("adds what the server has and records it as synced", () => {
+    const r = applyRemote(EMPTY_DATA, [row("gym", "a", gym("a"))], {});
+    expect(r.changed).toBe(true);
+    expect(r.data.logs.gym).toHaveLength(1);
+    expect(diff(flatten(r.data), r.shadow).rows).toEqual([]); // nothing to upload straight after
+  });
+
+  it("does nothing when the server row equals what is here", () => {
+    const d = data({ logs: { ...EMPTY_DATA.logs, gym: [gym("a")] } });
+    const r = applyRemote(d, [row("gym", "a", { minutes: 60, kind: "Push", date: "2026-11-16", id: "a" })], {});
+    expect(r.changed).toBe(false);
+    expect(r.data).toBe(d);
+    expect(r.shadow[keyOf("gym", "a")]).toBeTruthy();
+  });
+
+  it("keeps a local change that has not been uploaded yet", () => {
+    const synced = data({ logs: { ...EMPTY_DATA.logs, gym: [gym("a", 60)] } });
+    const shadow = shadowOf(synced);
+    const edited = data({ logs: { ...EMPTY_DATA.logs, gym: [gym("a", 90)] } });
+    const r = applyRemote(edited, [row("gym", "a", gym("a", 30))], shadow);
+    expect(r.changed).toBe(false);
+    expect(r.data.logs.gym[0].minutes).toBe(90);
+  });
+
+  it("keeps a local deletion that has not been uploaded yet", () => {
+    const synced = data({ logs: { ...EMPTY_DATA.logs, gym: [gym("a")] } });
+    const r = applyRemote(EMPTY_DATA, [row("gym", "a", gym("a", 99))], shadowOf(synced));
+    expect(r.changed).toBe(false);
+    expect(r.data.logs.gym).toHaveLength(0);
+  });
+
+  it("applies deletions made elsewhere", () => {
+    const d = data({ logs: { ...EMPTY_DATA.logs, gym: [gym("a"), gym("b")] } });
+    const r = applyRemote(d, [row("gym", "a", null, true)], shadowOf(d));
+    expect(r.data.logs.gym.map((g) => g.id)).toEqual(["b"]);
+    expect(keyOf("gym", "a") in r.shadow).toBe(false);
+  });
+
+  it("lets the server's settings win on a fresh device, then resets when they are deleted", () => {
+    const r = applyRemote(EMPTY_DATA, [row("settings", "main", { gymPerWeek: 6, richTarget: 50000 })], {});
+    expect(r.data.settings.gymPerWeek).toBe(6);
+    expect(r.data.settings.sleepHours).toBe(DEFAULT_SETTINGS.sleepHours);
+    const back = applyRemote(r.data, [row("settings", "main", null, true)], r.shadow);
+    expect(back.data.settings).toEqual(DEFAULT_SETTINGS);
+  });
+
+  it("takes the last version when a row appears twice and keeps the wishlist newest first", () => {
+    const w = (id: string, addedAt: number, title: string) => ({ id, url: `https://x.nl/${id}`, title, site: "x.nl", currency: "EUR", addedAt, status: "ready" as const });
+    const r = applyRemote(data({ wishlist: [w("old", 1, "Old")] }), [row("wish", "new", w("new", 5, "v1")), row("wish", "new", w("new", 5, "v2"))], {});
+    expect(r.data.wishlist.map((x) => `${x.id}:${x.title}`)).toEqual(["new:v2", "old:Old"]);
+  });
+});
+
+describe("mergeData", () => {
+  it("adds what is missing without duplicating and keeps existing settings", () => {
+    const base = data({
+      logs: { ...EMPTY_DATA.logs, gym: [gym("a")] },
+      groceries: [{ id: "1", name: "Melk", needed: true, movedAt: 1 }],
+      settings: { ...DEFAULT_SETTINGS, gymPerWeek: 3 },
+    });
+    const old = data({
+      logs: { ...EMPTY_DATA.logs, gym: [gym("a"), gym("b")] },
+      groceries: [{ id: "2", name: " melk ", needed: false, movedAt: 2 }, { id: "3", name: "Brood", needed: true, movedAt: 3 }],
+      settings: { ...DEFAULT_SETTINGS, gymPerWeek: 6 },
+    });
+    const merged = mergeData(base, old);
+    expect(merged.logs.gym.map((g) => g.id)).toEqual(["a", "b"]);
+    expect(merged.groceries.map((g) => g.name)).toEqual(["Melk", "Brood"]);
+    expect(merged.settings.gymPerWeek).toBe(3);
+    expect(mergeData(EMPTY_DATA, old).settings.gymPerWeek).toBe(6);
+  });
+});

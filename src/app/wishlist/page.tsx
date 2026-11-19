@@ -8,6 +8,7 @@ import { Bar, Label, PrimaryButton, TextInput } from "@/components/ui";
 import { todayKey } from "@/lib/dates";
 import { money, moneyIn, parseAmount } from "@/lib/format";
 import { moneyFrom } from "@/lib/game";
+import { authHeaders } from "@/lib/supabase";
 import { useLife } from "@/lib/store";
 import type { WishItem } from "@/lib/types";
 
@@ -46,7 +47,7 @@ export default function WishlistPage() {
     async (id: string, url: string) => {
       updateWish(id, { status: "loading" });
       try {
-        const res = await fetch(`/api/preview?url=${encodeURIComponent(url)}`);
+        const res = await fetch(`/api/preview?url=${encodeURIComponent(url)}`, { headers: await authHeaders() });
         if (!res.ok) throw new Error();
         const p = (await res.json()) as { title?: string; image?: string; price?: number; currency?: string; site?: string };
         const current = useLife.getState().wishlist.find((w) => w.id === id);

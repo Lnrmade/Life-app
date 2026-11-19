@@ -2,14 +2,17 @@
 
 import Link from "next/link";
 import { useRef, useState } from "react";
+import { useAuth } from "@/components/AuthContext";
 import { Character } from "@/components/Character";
 import { PixelIcon } from "@/components/PixelIcon";
 import { Label, Stepper, TextInput } from "@/components/ui";
+import { requestWipe, syncNow, useSyncStatus } from "@/lib/cloud";
 import { todayKey } from "@/lib/dates";
 import { demoData } from "@/lib/demo";
 import { hoursLabel, parseAmount } from "@/lib/format";
 import { gameState } from "@/lib/game";
 import { snapshot, useLife } from "@/lib/store";
+import { cloudEnabled, supabase } from "@/lib/supabase";
 import { EMPTY_DATA } from "@/lib/types";
 import type { LifeData, Settings } from "@/lib/types";
 
@@ -50,6 +53,42 @@ export default function SettingsPage() {
   const file = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState("");
   const look = gameState({ logs, settings }, todayKey()).look;
+  const { user, offline } = useAuth();
+  const sync = useSyncStatus();
+  const [busy, setBusy] = useState(false);
+
+  const syncLine =
+    offline || sync.state === "offline" ? "Offline. Changes upload when you are back online."
+    : sync.state === "syncing" ? "Syncing"
+    : sync.state === "error" ? `Could not sync: ${sync.error}`
+    : sync.lastAt ? `Synced at ${new Date(sync.lastAt).toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit" })}`
+    : "Not synced yet";
+
+  const signOut = async () => {
+    if (!supabase) return;
+    setBusy(true);
+    await syncNow();
+    const unsent = useSyncStatus.getState().state !== "idle";
+    if (unsent && !confirm("Some changes could not be uploaded yet. They stay on this device and upload next time you log in here. Log out anyway?")) {
+      setBusy(false);
+      return;
+    }
+    await supabase.auth.signOut();
+  };
+
+  const deleteAccount = async () => {
+    if (!supabase) return;
+    if (!confirm("Delete your account and everything in it? Your logins and all your data are removed for good. This cannot be undone.")) return;
+    setBusy(true);
+    const { error } = await supabase.rpc("delete_my_account");
+    if (error) {
+      setBusy(false);
+      setMessage(`Could not delete the account: ${error.message}`);
+      return;
+    }
+    requestWipe();
+    await supabase.auth.signOut({ scope: "local" });
+  };
 
   const exportData = () => {
     const blob = new Blob([JSON.stringify(snapshot(), null, 2)], { type: "application/json" });
@@ -80,6 +119,33 @@ export default function SettingsPage() {
         </Link>
         <h1 className="font-pixel text-[34px] leading-none">Settings</h1>
       </header>
+
+      <section className="mb-4 rounded-[20px] bg-coal p-4">
+        <h2 className="mb-3 font-pixel text-[23px] leading-none">Account</h2>
+        {cloudEnabled && user ? (
+          <div className="space-y-3">
+            <div>
+              <div className="font-medium">{user.email}</div>
+              <p role="status" className="text-[14px] text-ash">{syncLine}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button type="button" onClick={() => void syncNow()} disabled={sync.state === "syncing"} className="h-12 rounded-xl bg-pit font-medium hover:bg-line disabled:opacity-40">
+                Sync now
+              </button>
+              <button type="button" onClick={() => void signOut()} disabled={busy} className="h-12 rounded-xl bg-pit font-medium hover:bg-line disabled:opacity-40">
+                Log out
+              </button>
+            </div>
+            <button type="button" onClick={() => void deleteAccount()} disabled={busy} className="h-11 w-full text-[14px] text-bad underline underline-offset-4 disabled:opacity-40">
+              Delete my account and data
+            </button>
+          </div>
+        ) : (
+          <p className="text-[14px] text-ash">
+            Accounts are not set up, so your data stays on this device only. Use the backup below to move it somewhere else.
+          </p>
+        )}
+      </section>
 
       <section className="rounded-[20px] bg-coal p-4">
         <h2 className="mb-3 font-pixel text-[23px] leading-none">Your character</h2>
@@ -133,8 +199,9 @@ export default function SettingsPage() {
       <section className="mt-4 rounded-[20px] bg-coal p-4">
         <h2 className="mb-2 font-pixel text-[23px] leading-none">Your data</h2>
         <p className="mb-4 text-[14px] text-ash">
-          Everything is stored in this browser on this device. Nothing is uploaded. Download a backup now and then, and use it
-          to move to another phone or laptop.
+          {user
+            ? "Your data syncs to your account, so it follows you to every device you log in on. A backup file is optional."
+            : "Everything is stored in this browser on this device. Nothing is uploaded. Download a backup now and then, and use it to move to another phone or laptop."}
         </p>
         <div className="grid grid-cols-2 gap-2">
           <button type="button" onClick={exportData} className="h-12 rounded-xl bg-pit font-medium hover:bg-line">
@@ -146,7 +213,7 @@ export default function SettingsPage() {
           <button
             type="button"
             onClick={() => {
-              if (confirm("Replace everything with six months of example data?")) {
+              if (confirm(user ? "Replace everything in your account with six months of example data? Use Erase everything afterwards to start for real." : "Replace everything with six months of example data?")) {
                 replaceAll(demoData());
                 setMessage("Example data loaded. Erase everything to start for real.");
               }
@@ -158,7 +225,7 @@ export default function SettingsPage() {
           <button
             type="button"
             onClick={() => {
-              if (confirm("Erase all logs, lists, trips and settings on this device? This cannot be undone.")) {
+              if (confirm(user ? "Erase all logs, lists, trips and settings in your account, on every device? This cannot be undone." : "Erase all logs, lists, trips and settings on this device? This cannot be undone.")) {
                 replaceAll(EMPTY_DATA);
                 setMessage("Everything erased.");
               }
